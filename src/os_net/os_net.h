@@ -43,6 +43,10 @@ int OS_ConnectTCP(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_i
 int OS_ConnectTLS(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_interface, void *ssl_ctx);
 int OS_ConnectUDP(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_interface);
 
+/* TLS socket registration (for server-side TLS; caller manages SSL lifecycle when free_ssl=0) */
+void OS_RegisterTLSSocket(int sock, void *ssl);
+void OS_UnregisterTLSSocket(int sock, int free_ssl);
+
 /* OS_RecvUDP
  * Receive a UDP packet. Return NULL if failed
  */

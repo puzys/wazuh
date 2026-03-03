@@ -79,12 +79,12 @@ static int os_net_register_tls(int sock, SSL *ssl)
     return 0;
 }
 
-static void os_net_unregister_tls(int sock)
+static void os_net_unregister_tls(int sock, int free_ssl)
 {
     for (int i = 0; i < tls_map_count; i++) {
         if (tls_map[i].sock == sock) {
             SSL *ssl = tls_map[i].ssl;
-            if (ssl) {
+            if (ssl && free_ssl) {
                 SSL_shutdown(ssl);
                 SSL_free(ssl);
             }
@@ -97,6 +97,16 @@ static void os_net_unregister_tls(int sock)
             return;
         }
     }
+}
+
+void OS_RegisterTLSSocket(int sock, void *ssl)
+{
+    os_net_register_tls(sock, (SSL *)ssl);
+}
+
+void OS_UnregisterTLSSocket(int sock, int free_ssl)
+{
+    os_net_unregister_tls(sock, free_ssl);
 }
 
 static ssize_t os_recv_waitall_ssl(SSL *ssl, void *buf, size_t size)
@@ -712,7 +722,7 @@ char *OS_GetHost(const char *host, unsigned int attempts)
 
 int OS_CloseSocket(int socket)
 {
-    os_net_unregister_tls(socket);
+    os_net_unregister_tls(socket, 1);
 #ifdef WIN32
     shutdown(socket, SD_BOTH);
     return (closesocket(socket));

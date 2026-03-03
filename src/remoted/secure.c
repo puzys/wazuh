@@ -398,6 +398,7 @@ STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_storag
                 }
                 nb_open_ssl(&netbuffer_recv, sock_client, ssl, peer_info);
                 nb_open_ssl(&netbuffer_send, sock_client, ssl, peer_info);
+                OS_RegisterTLSSocket(sock_client, ssl);
             } else {
                 merror("Failed to create SSL object for connection [%d]", sock_client);
                 close(sock_client);
@@ -1067,6 +1068,7 @@ int _close_sock(keystore * keys, int sock) {
     if (sock >= 0 && sock <= netbuffer_recv.max_fd && netbuffer_recv.buffers &&
         netbuffer_recv.buffers[sock].ssl) {
         void *ssl = netbuffer_recv.buffers[sock].ssl;
+        OS_UnregisterTLSSocket(sock, 0);
         nb_close_ssl(&netbuffer_recv, sock, ssl);
         netbuffer_send.buffers[sock].ssl = NULL;  /* ssl already freed */
         nb_close(&netbuffer_send, sock);

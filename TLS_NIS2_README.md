@@ -36,9 +36,9 @@ You can use the same certificates as `wazuh-authd` (enrollment). Generate them w
 /var/ossec/bin/wazuh-authd -C 365 -B 2048 -K /var/ossec/etc/sslmanager.key -X /var/ossec/etc/sslmanager.cert -S "/C=LT/ST=Vilnius/CN=wazuh-manager/"
 ```
 
-## Agent Connection Options
+## Agent Configuration
 
-### Option A: Native TLS (Recommended for NIS2)
+### Native TLS
 
 The agent supports native TLS for the manager connection. Add `<use_tls>yes</use_tls>` and optionally `<tls_port>1516</tls_port>` to your `<manager>` block:
 
@@ -70,25 +70,43 @@ The agent supports native TLS for the manager connection. Add `<use_tls>yes</use
 
 If `tls_certificate_path`, `tls_key_path`, and `tls_ca_path` are not set, the agent falls back to enrollment configuration (`agent_certificate_path`, `agent_key_path`, `server_ca_path`) when enrollment is configured.
 
-### Option B: TLS Proxy (stunnel)
+## Certificate Management
 
-Use stunnel if you prefer not to use native agent TLS. The agent connects to localhost; stunnel forwards to the manager over TLS.
+### PKI Layout
 
-**Manager:** Listen on port 1516 with `secure_tls`.
+- **CA certificate** – Signs manager and agent certs. Distribute to manager and all agents.
+- **Manager certificate** – Server cert for the manager. CN should match manager hostname or use a SAN.
+- **Agent certificate** – Client cert for each agent. Can be per-agent or shared (e.g. one cert per agent group).
 
-**Agent host:** Run stunnel:
+### Generation (example)
 
-```ini
-; /etc/stunnel/agent-tls.conf
-[agent-to-manager]
-client = yes
-accept = 127.0.0.1:1514
-connect = manager-ip:1516
-verifyChain = yes
-CAfile = /path/to/ca.crt
+```bash
+# 1. Create CA (once)
+openssl genrsa -out rootca.key 4096
+openssl req -new -x509 -days 3650 -key rootca.key -out rootca.cert -subj "/C=LT/ST=Vilnius/O=MyOrg/CN=Wazuh-CA"
+
+# 2. Manager cert
+openssl genrsa -out sslmanager.key 2048
+openssl req -new -key sslmanager.key -out sslmanager.csr -subj "/C=LT/ST=Vilnius/CN=wazuh-manager"
+openssl x509 -req -in sslmanager.csr -CA rootca.cert -CAkey rootca.key -CAcreateserial -out sslmanager.cert -days 365
+
+# 3. Agent cert (per agent or shared)
+openssl genrsa -out agent.key 2048
+openssl req -new -key agent.key -out agent.csr -subj "/C=LT/ST=Vilnius/CN=agent-001"
+openssl x509 -req -in agent.csr -CA rootca.cert -CAkey rootca.key -CAcreateserial -out agent.cert -days 365
 ```
 
-**Agent ossec.conf:** Keep default (connects to 127.0.0.1:1514). Stunnel listens there and forwards to manager:1516 over TLS.
+### Deployment
+
+| Role   | Files to deploy                          |
+|--------|------------------------------------------|
+| Manager| `rootca.cert`, `sslmanager.cert`, `sslmanager.key` |
+| Agent  | `rootca.cert`, `agent.cert`, `agent.key` |
+
+### Renewal
+
+- Renew before expiry (e.g. 30 days). Restart manager/agent after replacing certs.
+- Or use `wazuh-authd` for enrollment: it issues agent certs; use the same CA for manager TLS.
 
 ## Running Both Secure and Secure TLS
 
@@ -107,11 +125,18 @@ You can run both legacy (AES) and TLS listeners by defining two `<remote>` block
 </remote>
 ```
 
-## Backward Compatibility
+## Backward Compatibility (No Breaking Changes)
 
-- The manager can run both `secure` (port 1514, AES) and `secure_tls` (port 1516, TLS) by defining two `<remote>` blocks.
-- Existing agents continue using port 1514.
-- New NIS2-compliant deployments use port 1516 with TLS.
+**Manager:**
+- `secure_tls` is a new connection type. Existing `<remote><connection>secure</connection>` blocks are unchanged.
+- Default port 1514 (AES) is unchanged. TLS uses port 1516 only when explicitly configured.
+- You can run both: one `<remote>` for `secure` (1514) and one for `secure_tls` (1516).
+
+**Agent:**
+- `use_tls` defaults to `no`. Agents without `<use_tls>yes</use_tls>` behave exactly as before (plain TCP to port 1514).
+- No config change = no behavior change.
+
+**Summary:** Existing setups continue to work. TLS is opt-in.
 
 ## Build
 
