@@ -25,6 +25,11 @@ typedef struct agent_server {
     uint32_t network_interface;
     int max_retries; ///< Maximum number of connection retries.
     int retry_interval; ///< Time interval between connection attempts.
+    int use_tls; ///< Use TLS for manager connection (NIS2 compliant).
+    int tls_port; ///< Manager TLS port (default 1516 when use_tls).
+    char *tls_certificate_path; ///< Agent cert for TLS (optional, falls back to enrollment).
+    char *tls_key_path; ///< Agent key for TLS (optional, falls back to enrollment).
+    char *tls_ca_path; ///< CA cert for server verification (optional, falls back to enrollment).
 } agent_server;
 
 /* Configuration structure */

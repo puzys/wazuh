@@ -17,7 +17,7 @@
 #include "sym_load.h"
 #include "agent_messages_adapter.h"
 #include "indexed_queue_op.h"
-
+#include "ssl_op.h"
 
 #ifdef WAZUH_UNIT_TESTING
 // Remove static qualifier when unit testing
@@ -35,6 +35,9 @@ netbuffer_t netbuffer_send;
 wnotify_t * notify = NULL;
 
 size_t global_counter;
+
+/* SSL context for SECURE_TLS_CONN (NIS2 compliant) */
+STATIC SSL_CTX *remoted_ssl_ctx = NULL;
 
 _Atomic (time_t) current_ts;
 
@@ -278,6 +281,17 @@ void HandleSecure()
         }
     }
 
+    /* Initialize SSL context for TLS connections (NIS2 compliant) */
+    if (logr.conn[logr.position] == SECURE_TLS_CONN) {
+        remoted_ssl_ctx = os_ssl_keys(1, ".", logr.tls_ciphers,
+                                      logr.tls_certificate, logr.tls_key,
+                                      logr.tls_ca, 0);
+        if (!remoted_ssl_ctx) {
+            merror_exit("Failed to initialize TLS context for agent connections.");
+        }
+        minfo("TLS enabled for agent-manager communication (NIS2 compliant).");
+    }
+
     /* Connect to the message queue
      * Exit if it fails.
      */
@@ -371,12 +385,33 @@ STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_storag
     int sock_client = accept(logr.tcp_sock, (struct sockaddr *) peer_info, &logr.peer_size);
 
     if (sock_client >= 0) {
-        nb_open(&netbuffer_recv, sock_client, peer_info);
-        nb_open(&netbuffer_send, sock_client, peer_info);
+        if (logr.conn[logr.position] == SECURE_TLS_CONN && remoted_ssl_ctx) {
+            SSL *ssl = SSL_new(remoted_ssl_ctx);
+            if (ssl) {
+                SSL_set_fd(ssl, sock_client);
+                if (SSL_accept(ssl) <= 0) {
+                    mwarn("TLS handshake failed for connection [%d]: %s", sock_client,
+                          ERR_error_string(ERR_get_error(), NULL));
+                    SSL_free(ssl);
+                    close(sock_client);
+                    return;
+                }
+                nb_open_ssl(&netbuffer_recv, sock_client, ssl, peer_info);
+                nb_open_ssl(&netbuffer_send, sock_client, ssl, peer_info);
+            } else {
+                merror("Failed to create SSL object for connection [%d]", sock_client);
+                close(sock_client);
+                return;
+            }
+        } else {
+            nb_open(&netbuffer_recv, sock_client, peer_info);
+            nb_open(&netbuffer_send, sock_client, peer_info);
+        }
 
         rem_inc_tcp();
 
-        mdebug1("New TCP connection [%d]", sock_client);
+        mdebug1("New TCP connection [%d]%s", sock_client,
+                logr.conn[logr.position] == SECURE_TLS_CONN ? " (TLS)" : "");
 
         if (wnotify_add(notify, sock_client, WO_READ) < 0) {
             merror("wnotify_add(%d, %d): %s (%d)", notify->fd, sock_client, strerror(errno), errno);
@@ -1029,11 +1064,18 @@ int _close_sock(keystore * keys, int sock) {
     retval = OS_DeleteSocket(keys, sock);
     key_unlock();
 
-    if (!close(sock)) {
+    if (sock >= 0 && sock <= netbuffer_recv.max_fd && netbuffer_recv.buffers &&
+        netbuffer_recv.buffers[sock].ssl) {
+        void *ssl = netbuffer_recv.buffers[sock].ssl;
+        nb_close_ssl(&netbuffer_recv, sock, ssl);
+        netbuffer_send.buffers[sock].ssl = NULL;  /* ssl already freed */
+        nb_close(&netbuffer_send, sock);
+    } else {
         nb_close(&netbuffer_recv, sock);
         nb_close(&netbuffer_send, sock);
-        rem_dec_tcp();
     }
+    close(sock);
+    rem_dec_tcp();
 
     mdebug1("TCP peer disconnected [%d]", sock);
 

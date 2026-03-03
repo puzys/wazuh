@@ -58,6 +58,10 @@ int RemotedConfig(const char *cfgfile, remoted *cfg)
     cfg->queue_size = 131072;
     cfg->allow_higher_versions = REMOTED_ALLOW_AGENTS_HIGHER_VERSIONS_DEFAULT;
     cfg->connection_overtake_time = 60;
+    cfg->tls_certificate = NULL;
+    cfg->tls_key = NULL;
+    cfg->tls_ca = NULL;
+    cfg->tls_ciphers = NULL;
 
     // Initialize all internal options
     receive_chunk = (unsigned)getDefine_Int("remoted", "receive_chunk", 1024, 16384);
@@ -127,6 +131,7 @@ cJSON *getRemoteConfig(void) {
             cJSON *conn = cJSON_CreateObject();
             if (logr.conn[i] == SYSLOG_CONN) cJSON_AddStringToObject(conn,"connection","syslog");
             else if (logr.conn[i] == SECURE_CONN) cJSON_AddStringToObject(conn,"connection","secure");
+            else if (logr.conn[i] == SECURE_TLS_CONN) cJSON_AddStringToObject(conn,"connection","secure_tls");
             if (logr.ipv6 && logr.ipv6[i]) cJSON_AddStringToObject(conn,"ipv6","yes"); else cJSON_AddStringToObject(conn,"ipv6","no");
             if (logr.lip && logr.lip[i]) cJSON_AddStringToObject(conn,"local_ip",logr.lip[i]);
 

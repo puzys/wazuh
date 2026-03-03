@@ -13,6 +13,7 @@
 
 #define SYSLOG_CONN 1
 #define SECURE_CONN 2
+#define SECURE_TLS_CONN 3
 
 #define REMOTED_NET_PROTOCOL_TCP     (0x1 << 0)               ///< Config for TCP protocol enabled
 #define REMOTED_NET_PROTOCOL_UDP     (0x1 << 1)               ///< Config for UDP protocol enabled
@@ -48,6 +49,12 @@ typedef struct _remoted {
     int tcp_sock;       ///< This socket is used to receive requests over TCP
     int udp_sock;       ///< This socket is used to receive requests over UDP
     int position;       ///< This allows the childs to access its corresponding remoted parameters (unique per child)
+
+    /* TLS configuration for SECURE_TLS_CONN */
+    char *tls_certificate;
+    char *tls_key;
+    char *tls_ca;
+    char *tls_ciphers;
     socklen_t peer_size;
     long queue_size;
     bool worker_node;

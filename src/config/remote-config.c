@@ -11,6 +11,7 @@
 #include "shared.h"
 #include "remote-config.h"
 #include "config.h"
+#include "ssl_op.h"
 
 #ifdef WAZUH_UNIT_TESTING
 // Remove STATIC qualifier from tests
@@ -39,6 +40,7 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
 {
     int i = 0;
     int secure_count = 0;
+    int secure_tls_count = 0;
     unsigned int pl = 0;
     unsigned int allow_size = 1;
     unsigned int deny_size = 1;
@@ -59,6 +61,10 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
     const char *xml_remote_connection = "connection";
     const char *xml_remote_lip = "local_ip";
     const char *xml_remote_agents = "agents";
+    const char *xml_tls_certificate = "tls_certificate";
+    const char *xml_tls_key = "tls_key";
+    const char *xml_tls_ca = "tls_ca";
+    const char *xml_tls_ciphers = "tls_ciphers";
     const char *xml_queue_size = "queue_size";
     const char *xml_rids_closing_time = "rids_closing_time";
     const char *xml_connection_overtake_time = "connection_overtake_time";
@@ -101,13 +107,12 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
         logr->lip[0] = NULL;
     }
 
-    /* Clean */
+    /* Clean - count existing connections */
     while (logr->conn[pl] != 0) {
         if (logr->conn[pl] == SECURE_CONN) {
-            if (++secure_count > 1) {
-                merror(DUP_SECURE);
-                return (OS_INVALID);
-            }
+            secure_count++;
+        } else if (logr->conn[pl] == SECURE_TLS_CONN) {
+            secure_tls_count++;
         }
         pl++;
     }
@@ -150,6 +155,12 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
                 logr->conn[pl] = SECURE_CONN;
                 if (++secure_count > 1) {
                     merror(DUP_SECURE);
+                    return (OS_INVALID);
+                }
+            } else if (strcmp(node[i]->content, "secure_tls") == 0) {
+                logr->conn[pl] = SECURE_TLS_CONN;
+                if (++secure_tls_count > 1) {
+                    merror("Duplicate secure_tls connection.");
                     return (OS_INVALID);
                 }
             } else {
@@ -269,6 +280,14 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
 
             OS_ClearNode(children);
 
+        } else if (strcasecmp(node[i]->element, xml_tls_certificate) == 0) {
+            os_strdup(node[i]->content, logr->tls_certificate);
+        } else if (strcasecmp(node[i]->element, xml_tls_key) == 0) {
+            os_strdup(node[i]->content, logr->tls_key);
+        } else if (strcasecmp(node[i]->element, xml_tls_ca) == 0) {
+            os_strdup(node[i]->content, logr->tls_ca);
+        } else if (strcasecmp(node[i]->element, xml_tls_ciphers) == 0) {
+            os_strdup(node[i]->content, logr->tls_ciphers);
         } else {
             merror(XML_INVELEM, node[i]->element);
             return (OS_INVALID);
@@ -286,6 +305,8 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
     if (logr->port[pl] == 0) {
         if (logr->conn[pl] == SECURE_CONN) {
             logr->port[pl] = DEFAULT_SECURE;
+        } else if (logr->conn[pl] == SECURE_TLS_CONN) {
+            logr->port[pl] = DEFAULT_SECURE_TLS;
         } else {
             logr->port[pl] = DEFAULT_SYSLOG;
         }
@@ -296,9 +317,22 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
         logr->proto[pl] = REMOTED_NET_PROTOCOL_DEFAULT;
     }
     /* Only secure connections support TCP and UDP at the same time */
-    else if (logr->conn[pl] != SECURE_CONN && (logr->proto[pl] == REMOTED_NET_PROTOCOL_TCP_UDP)) {
+    else if (logr->conn[pl] != SECURE_CONN && logr->conn[pl] != SECURE_TLS_CONN &&
+             (logr->proto[pl] == REMOTED_NET_PROTOCOL_TCP_UDP)) {
         mwarn(REMOTED_NET_PROTOCOL_ONLY_SECURE, REMOTED_NET_PROTOCOL_DEFAULT_STR);
         logr->proto[pl] = REMOTED_NET_PROTOCOL_DEFAULT;
+    }
+
+    /* SECURE_TLS_CONN only supports TCP */
+    if (logr->conn[pl] == SECURE_TLS_CONN) {
+        logr->proto[pl] = REMOTED_NET_PROTOCOL_TCP;
+        if (!logr->tls_certificate || !logr->tls_key) {
+            merror("TLS connection requires tls_certificate and tls_key to be set.");
+            return (OS_INVALID);
+        }
+        if (!logr->tls_ciphers) {
+            os_strdup(DEFAULT_CIPHERS, logr->tls_ciphers);
+        }
     }
 
     /* Queue_size is only for secure connections */

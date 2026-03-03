@@ -14,6 +14,7 @@
 #include <os_net/os_net.h>
 #include "remoted.h"
 #include "state.h"
+#include "ssl_op.h"
 
 extern wnotify_t * notify;
 
@@ -31,7 +32,15 @@ void nb_open(netbuffer_t * buffer, int sock, const struct sockaddr_storage * pee
     memcpy(&buffer->buffers[sock].peer_info, peer_info, sizeof(struct sockaddr_storage));
 
     buffer->buffers[sock].bqueue = bqueue_init(send_buffer_size, BQUEUE_SHRINK);
+    buffer->buffers[sock].ssl = NULL;
 
+    w_mutex_unlock(&mutex);
+}
+
+void nb_open_ssl(netbuffer_t * buffer, int sock, void * ssl, const struct sockaddr_storage * peer_info) {
+    nb_open(buffer, sock, peer_info);
+    w_mutex_lock(&mutex);
+    buffer->buffers[sock].ssl = ssl;
     w_mutex_unlock(&mutex);
 }
 
@@ -44,9 +53,19 @@ void nb_close(netbuffer_t * buffer, int sock) {
     }
 
     os_free(buffer->buffers[sock].data);
+    buffer->buffers[sock].ssl = NULL;
     memset(buffer->buffers + sock, 0, sizeof(sockbuffer_t));
 
     w_mutex_unlock(&mutex);
+}
+
+void nb_close_ssl(netbuffer_t * buffer, int sock, void * ssl) {
+    if (ssl) {
+        SSL *ssl_ptr = (SSL *)ssl;
+        SSL_shutdown(ssl_ptr);
+        SSL_free(ssl_ptr);
+    }
+    nb_close(buffer, sock);
 }
 
 /*
@@ -74,9 +93,18 @@ int nb_recv(netbuffer_t * buffer, int sock) {
         sockbuf->data_size = data_ext;
     }
 
-    // Receive and append
-
-    recv_len = recv(sock, sockbuf->data + sockbuf->data_len, receive_chunk, 0);
+    // Receive and append (use SSL_read when TLS is enabled)
+    if (sockbuf->ssl) {
+        recv_len = SSL_read((SSL *)sockbuf->ssl, sockbuf->data + sockbuf->data_len, receive_chunk);
+        if (recv_len < 0) {
+            int err = SSL_get_error((SSL *)sockbuf->ssl, recv_len);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                recv_len = 0;  /* No data available, not an error */
+            }
+        }
+    } else {
+        recv_len = recv(sock, sockbuf->data + sockbuf->data_len, receive_chunk, 0);
+    }
 
     if (recv_len <= 0) {
         goto end;
@@ -156,21 +184,37 @@ int nb_send(netbuffer_t * buffer, int socket) {
 
         ssize_t peeked_bytes = bqueue_peek(buffer->buffers[socket].bqueue, data, send_chunk, BQUEUE_NOFLAG);
         if (peeked_bytes > 0) {
-            // Asynchronous sending
-            sent_bytes = send(socket, (const void *)data, peeked_bytes, MSG_DONTWAIT);
+            // Asynchronous sending (use SSL_write when TLS is enabled)
+            if (buffer->buffers[socket].ssl) {
+                sent_bytes = SSL_write((SSL *)buffer->buffers[socket].ssl, (const void *)data, peeked_bytes);
+                if (sent_bytes < 0) {
+                    int err = SSL_get_error((SSL *)buffer->buffers[socket].ssl, sent_bytes);
+                    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                        sent_bytes = 0;  /* Would block, try again later */
+                    }
+                }
+            } else {
+                sent_bytes = send(socket, (const void *)data, peeked_bytes, MSG_DONTWAIT);
+            }
         }
 
         if (sent_bytes > 0) {
             bqueue_drop(buffer->buffers[socket].bqueue, sent_bytes);
         } else if (sent_bytes < 0) {
-            switch (errno) {
-            case EAGAIN:
+            int ssl_err = 0;
+            if (buffer->buffers[socket].ssl) {
+                ssl_err = SSL_get_error((SSL *)buffer->buffers[socket].ssl, sent_bytes);
+            }
+            if (!buffer->buffers[socket].ssl || (ssl_err != SSL_ERROR_WANT_READ && ssl_err != SSL_ERROR_WANT_WRITE)) {
+                switch (errno) {
+                case EAGAIN:
     #if EAGAIN != EWOULDBLOCK
             case EWOULDBLOCK:
     #endif
                 break;
-            default:
-                merror("Could not send data to socket %d: %s (%d)", socket, strerror(errno), errno);
+        default:
+            merror("Could not send data to socket %d: %s (%d)", socket, strerror(errno), errno);
+            }
             }
         }
 

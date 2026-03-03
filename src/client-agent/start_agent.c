@@ -11,6 +11,7 @@
 #include "shared.h"
 #include "agentd.h"
 #include "os_net/os_net.h"
+#include "ssl_op.h"
 
 #ifdef WAZUH_UNIT_TESTING
     // Remove static qualifier when unit testing
@@ -56,10 +57,11 @@ bool connect_server(int server_id, bool verbose)
 
         if (agt->server[agt->rip_id].rip) {
             if (verbose) {
+                int port = agt->server[agt->rip_id].use_tls ? agt->server[agt->rip_id].tls_port : agt->server[agt->rip_id].port;
                 minfo("Closing connection to server ([%s]:%d/%s).",
                     agt->server[agt->rip_id].rip,
-                    agt->server[agt->rip_id].port,
-                    agt->server[agt->rip_id].protocol == IPPROTO_UDP ? "udp" : "tcp");
+                    port,
+                    agt->server[agt->rip_id].use_tls ? "tls" : (agt->server[agt->rip_id].protocol == IPPROTO_UDP ? "udp" : "tcp"));
             }
         }
     }
@@ -90,10 +92,41 @@ bool connect_server(int server_id, bool verbose)
     if (verbose) {
         minfo("Trying to connect to server ([%s]:%d/%s).",
             agt->server[server_id].rip,
-            agt->server[server_id].port,
-            agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp");
+            agt->server[server_id].use_tls ? agt->server[server_id].tls_port : agt->server[server_id].port,
+            agt->server[server_id].use_tls ? "tls" : (agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp"));
     }
-    if (agt->server[server_id].protocol == IPPROTO_UDP) {
+    if (agt->server[server_id].use_tls) {
+        const char *cert = agt->server[server_id].tls_certificate_path;
+        const char *key = agt->server[server_id].tls_key_path;
+        const char *ca = agt->server[server_id].tls_ca_path;
+        const char *ciphers = DEFAULT_CIPHERS;
+        int auto_method = 1;
+
+        if (!cert || !key || !ca) {
+            if (agt->enrollment_cfg && agt->enrollment_cfg->cert_cfg) {
+                cert = cert ? cert : agt->enrollment_cfg->cert_cfg->agent_cert;
+                key = key ? key : agt->enrollment_cfg->cert_cfg->agent_key;
+                ca = ca ? ca : agt->enrollment_cfg->cert_cfg->ca_cert;
+            }
+        }
+        if (!cert || !key || !ca) {
+            merror("use_tls is enabled but TLS certificate paths are not configured. Set tls_certificate_path, tls_key_path, and tls_ca_path in <manager>, or configure enrollment with agent_certificate_path, agent_key_path, and server_ca_path.");
+            os_free(ip_address);
+            return false;
+        }
+        if (agt->enrollment_cfg && agt->enrollment_cfg->cert_cfg) {
+            ciphers = agt->enrollment_cfg->cert_cfg->ciphers ? agt->enrollment_cfg->cert_cfg->ciphers : DEFAULT_CIPHERS;
+            auto_method = agt->enrollment_cfg->cert_cfg->auto_method;
+        }
+        SSL_CTX *ctx = os_ssl_keys(0, NULL, ciphers, cert, key, ca, auto_method);
+        if (!ctx) {
+            merror("Failed to create SSL context for TLS connection.");
+            os_free(ip_address);
+            return false;
+        }
+        agt->sock = OS_ConnectTLS(agt->server[server_id].tls_port, ip_address, strchr(ip_address, ':') != NULL ? 1 : 0, agt->server[server_id].network_interface, ctx);
+        SSL_CTX_free(ctx);
+    } else if (agt->server[server_id].protocol == IPPROTO_UDP) {
         agt->sock = OS_ConnectUDP(agt->server[server_id].port, ip_address, strchr(ip_address, ':') != NULL ? 1 : 0, agt->server[server_id].network_interface);
     } else {
         agt->sock = OS_ConnectTCP(agt->server[server_id].port, ip_address, strchr(ip_address, ':') != NULL ? 1 : 0, agt->server[server_id].network_interface);
@@ -103,10 +136,12 @@ bool connect_server(int server_id, bool verbose)
         agt->sock = -1;
 
         if (verbose) {
+            int port = agt->server[server_id].use_tls ? agt->server[server_id].tls_port : agt->server[server_id].port;
+            const char *proto = agt->server[server_id].use_tls ? "tls" : (agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp");
             #ifdef WIN32
-                merror(CONNS_ERROR, ip_address, agt->server[server_id].port, agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp", win_strerror(WSAGetLastError()));
+                merror(CONNS_ERROR, ip_address, port, proto, win_strerror(WSAGetLastError()));
             #else
-                merror(CONNS_ERROR, ip_address, agt->server[server_id].port, agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp", strerror(errno));
+                merror(CONNS_ERROR, ip_address, port, proto, strerror(errno));
             #endif
         }
     } else {

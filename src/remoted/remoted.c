@@ -63,7 +63,7 @@ void HandleRemote(int uid)
         if (logr.tcp_sock < 0) {
             merror_exit(BIND_ERROR, logr.port[position], errno, strerror(errno));
         }
-        else if (logr.conn[position] == SECURE_CONN) {
+        else if (logr.conn[position] == SECURE_CONN || logr.conn[position] == SECURE_TLS_CONN) {
 
             if (OS_SetKeepalive(logr.tcp_sock) < 0) {
                 merror("OS_SetKeepalive failed with error '%s'", strerror(errno));
@@ -118,11 +118,11 @@ void HandleRemote(int uid)
         (int)getpid(),
         logr.port[position],
         str_protocol,
-        logr.conn[position] == SECURE_CONN ? "secure" : "syslog");
+        logr.conn[position] == SECURE_TLS_CONN ? "secure_tls" : (logr.conn[position] == SECURE_CONN ? "secure" : "syslog"));
     os_free(str_protocol);
 
-    /* If secure connection, deal with it */
-    if (logr.conn[position] == SECURE_CONN) {
+    /* If secure or secure_tls connection, deal with it */
+    if (logr.conn[position] == SECURE_CONN || logr.conn[position] == SECURE_TLS_CONN) {
         HandleSecure();
     }
     else if (logr.proto[position] == REMOTED_NET_PROTOCOL_TCP) {

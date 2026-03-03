@@ -268,6 +268,11 @@ int Read_Client_Server(XML_NODE node, agent * logr)
     const char *xml_protocol = "protocol";
     const char *xml_max_retries = "max_retries";
     const char *xml_retry_interval = "retry_interval";
+    const char *xml_use_tls = "use_tls";
+    const char *xml_tls_port = "tls_port";
+    const char *xml_tls_cert = "tls_certificate_path";
+    const char *xml_tls_key = "tls_key_path";
+    const char *xml_tls_ca = "tls_ca_path";
 
     int j;
     char f_ip[128];
@@ -278,6 +283,11 @@ int Read_Client_Server(XML_NODE node, agent * logr)
     int protocol = IPPROTO_TCP;
     int max_retries = DEFAULT_MAX_RETRIES;
     int retry_interval = DEFAULT_RETRY_INTERVAL;
+    int use_tls = 0;
+    int tls_port = DEFAULT_SECURE_TLS;
+    char *tls_certificate_path = NULL;
+    char *tls_key_path = NULL;
+    char *tls_ca_path = NULL;
 
     /* Get parameters for each configurated server*/
 
@@ -350,6 +360,31 @@ int Read_Client_Server(XML_NODE node, agent * logr)
                 merror(XML_VALUEERR, node[j]->element, node[j]->content);
                 return (OS_INVALID);
             }
+        } else if (strcmp(node[j]->element, xml_use_tls) == 0) {
+            if (strcmp(node[j]->content, "yes") == 0 || strcmp(node[j]->content, "true") == 0) {
+                use_tls = 1;
+            } else if (strcmp(node[j]->content, "no") == 0 || strcmp(node[j]->content, "false") == 0) {
+                use_tls = 0;
+            } else {
+                merror(XML_VALUEERR, node[j]->element, node[j]->content);
+                return (OS_INVALID);
+            }
+        } else if (strcmp(node[j]->element, xml_tls_port) == 0) {
+            if (!OS_StrIsNum(node[j]->content)) {
+                merror(XML_VALUEERR, node[j]->element, node[j]->content);
+                return (OS_INVALID);
+            }
+            tls_port = atoi(node[j]->content);
+            if (tls_port <= 0 || tls_port > 65535) {
+                merror(PORT_ERROR, tls_port);
+                return (OS_INVALID);
+            }
+        } else if (strcmp(node[j]->element, xml_tls_cert) == 0) {
+            os_strdup(node[j]->content, tls_certificate_path);
+        } else if (strcmp(node[j]->element, xml_tls_key) == 0) {
+            os_strdup(node[j]->content, tls_key_path);
+        } else if (strcmp(node[j]->element, xml_tls_ca) == 0) {
+            os_strdup(node[j]->content, tls_ca_path);
         } else {
             merror(XML_INVELEM, node[j]->element);
             return (OS_INVALID);
@@ -372,6 +407,11 @@ int Read_Client_Server(XML_NODE node, agent * logr)
     logr->server[logr->server_count].protocol = protocol;
     logr->server[logr->server_count].max_retries = max_retries;
     logr->server[logr->server_count].retry_interval = retry_interval;
+    logr->server[logr->server_count].use_tls = use_tls;
+    logr->server[logr->server_count].tls_port = tls_port;
+    logr->server[logr->server_count].tls_certificate_path = tls_certificate_path;
+    logr->server[logr->server_count].tls_key_path = tls_key_path;
+    logr->server[logr->server_count].tls_ca_path = tls_ca_path;
     memset(logr->server + logr->server_count + 1, 0, sizeof(agent_server));
     logr->server_count++;
 
@@ -610,6 +650,9 @@ void Free_Client(agent * config){
         if (config->server) {
             for (i = 0; config->server[i].rip; i++) {
                 free(config->server[i].rip);
+                os_free(config->server[i].tls_certificate_path);
+                os_free(config->server[i].tls_key_path);
+                os_free(config->server[i].tls_ca_path);
             }
 
             free(config->server);

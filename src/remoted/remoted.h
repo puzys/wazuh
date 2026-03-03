@@ -55,6 +55,7 @@ typedef struct sockbuffer_t {
     unsigned long data_size;
     unsigned long data_len;
     bqueue_t * bqueue;
+    void* ssl;  /* SSL* when using TLS, NULL otherwise */
 } sockbuffer_t;
 
 typedef struct netbuffer_t {
@@ -76,7 +77,7 @@ void HandleSyslog(void) __attribute__((noreturn));
 /* Handle Syslog TCP */
 void HandleSyslogTCP(void) __attribute__((noreturn));
 
-/* Handle Secure connections */
+/* Handle Secure connections (including SECURE_TLS for NIS2 compliance) */
 void HandleSecure() __attribute__((noreturn));
 
 /* Forward active response events */
@@ -158,6 +159,8 @@ cJSON *getRemoteGlobalConfig(void);
 void nb_open(netbuffer_t * buffer, int sock, const struct sockaddr_storage * peer_info);
 void nb_close(netbuffer_t * buffer, int sock);
 int nb_recv(netbuffer_t * buffer, int sock);
+void nb_open_ssl(netbuffer_t * buffer, int sock, void * ssl, const struct sockaddr_storage * peer_info);
+void nb_close_ssl(netbuffer_t * buffer, int sock, void * ssl);
 
 /**
  * @brief Send message through TCP protocol.

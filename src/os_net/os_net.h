@@ -40,6 +40,7 @@ int OS_getsocketsize(int ossock);
  * Connect to a TCP/UDP socket
  */
 int OS_ConnectTCP(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_interface);
+int OS_ConnectTLS(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_interface, void *ssl_ctx);
 int OS_ConnectUDP(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_interface);
 
 /* OS_RecvUDP

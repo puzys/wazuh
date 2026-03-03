@@ -16,6 +16,7 @@
 #include "shared.h"
 #include "os_net.h"
 #include "wazuh_modules/wmodules.h"
+#include "ssl_op.h"
 
 #ifdef WIN32
 #pragma GCC diagnostic push
@@ -49,6 +50,69 @@ static int OS_Connect(u_int16_t _port, unsigned int protocol, const char *_ip, i
 
 #define RECV_SOCK 0
 #define SEND_SOCK 1
+
+#define MAX_TLS_SOCKETS 32
+static struct {
+    int sock;
+    SSL *ssl;
+} tls_map[MAX_TLS_SOCKETS];
+static int tls_map_count = 0;
+
+static SSL *os_net_get_tls(int sock)
+{
+    for (int i = 0; i < tls_map_count; i++) {
+        if (tls_map[i].sock == sock) {
+            return tls_map[i].ssl;
+        }
+    }
+    return NULL;
+}
+
+static int os_net_register_tls(int sock, SSL *ssl)
+{
+    if (tls_map_count >= MAX_TLS_SOCKETS) {
+        return -1;
+    }
+    tls_map[tls_map_count].sock = sock;
+    tls_map[tls_map_count].ssl = ssl;
+    tls_map_count++;
+    return 0;
+}
+
+static void os_net_unregister_tls(int sock)
+{
+    for (int i = 0; i < tls_map_count; i++) {
+        if (tls_map[i].sock == sock) {
+            SSL *ssl = tls_map[i].ssl;
+            if (ssl) {
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+            }
+            tls_map_count--;
+            if (i < tls_map_count) {
+                tls_map[i] = tls_map[tls_map_count];
+            }
+            tls_map[tls_map_count].sock = -1;
+            tls_map[tls_map_count].ssl = NULL;
+            return;
+        }
+    }
+}
+
+static ssize_t os_recv_waitall_ssl(SSL *ssl, void *buf, size_t size)
+{
+    size_t offset = 0;
+    int recvb;
+
+    while (offset < size) {
+        recvb = SSL_read(ssl, (char *)buf + offset, (int)(size - offset));
+        if (recvb <= 0) {
+            return recvb;
+        }
+        offset += (size_t)recvb;
+    }
+    return (ssize_t)offset;
+}
 
 
 /* Bind a specific port */
@@ -364,6 +428,55 @@ int OS_ConnectTCP(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_i
     return (OS_Connect(_port, IPPROTO_TCP, _ip, ipv6, network_interface));
 }
 
+/* Open a TLS-encrypted TCP socket (NIS2 compliant).
+ * Returns socket on success, OS_SOCKTERR on failure.
+ * Caller must free ctx with SSL_CTX_free after use.
+ */
+int OS_ConnectTLS(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_interface, void *ssl_ctx)
+{
+    int sock;
+    SSL *ssl;
+    int ret;
+
+    if (!ssl_ctx) {
+        return OS_SOCKTERR;
+    }
+
+    sock = OS_Connect(_port, IPPROTO_TCP, _ip, ipv6, network_interface);
+    if (sock < 0) {
+        return sock;
+    }
+
+    ssl = SSL_new((SSL_CTX *)ssl_ctx);
+    if (!ssl) {
+        OS_CloseSocket(sock);
+        return OS_SOCKTERR;
+    }
+
+    if (!SSL_set_fd(ssl, sock)) {
+        SSL_free(ssl);
+        OS_CloseSocket(sock);
+        return OS_SOCKTERR;
+    }
+
+    ret = SSL_connect(ssl);
+    if (ret != 1) {
+        merror("SSL_connect failed: %s", ERR_error_string(SSL_get_error(ssl, ret), NULL));
+        SSL_free(ssl);
+        OS_CloseSocket(sock);
+        return OS_SOCKTERR;
+    }
+
+    if (os_net_register_tls(sock, ssl) < 0) {
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        OS_CloseSocket(sock);
+        return OS_SOCKTERR;
+    }
+
+    return sock;
+}
+
 /* Open a UDP socket */
 int OS_ConnectUDP(u_int16_t _port, const char *_ip, int ipv6, uint32_t network_interface)
 {
@@ -599,6 +712,7 @@ char *OS_GetHost(const char *host, unsigned int attempts)
 
 int OS_CloseSocket(int socket)
 {
+    os_net_unregister_tls(socket);
 #ifdef WIN32
     shutdown(socket, SD_BOTH);
     return (closesocket(socket));
@@ -696,6 +810,7 @@ int OS_SendSecureTCP(int sock, uint32_t size, const void * msg) {
     int retval = OS_SOCKTERR;
     void* buffer = NULL;
     size_t bufsz = size + sizeof(uint32_t);
+    SSL *ssl;
 
     if (sock < 0) {
         return retval;
@@ -705,7 +820,14 @@ int OS_SendSecureTCP(int sock, uint32_t size, const void * msg) {
     *(uint32_t *)buffer = wnet_order(size);
     memcpy(buffer + sizeof(uint32_t), msg, size);
     errno = 0;
-    retval = send(sock, buffer, bufsz, 0) == (ssize_t)bufsz ? 0 : OS_SOCKTERR;
+
+    ssl = os_net_get_tls(sock);
+    if (ssl) {
+        int written = SSL_write(ssl, buffer, (int)bufsz);
+        retval = (written == (int)bufsz) ? 0 : OS_SOCKTERR;
+    } else {
+        retval = send(sock, buffer, bufsz, 0) == (ssize_t)bufsz ? 0 : OS_SOCKTERR;
+    }
     free(buffer);
     return retval;
 }
@@ -718,9 +840,16 @@ int OS_SendSecureTCP(int sock, uint32_t size, const void * msg) {
 int OS_RecvSecureTCP(int sock, char * ret, uint32_t size) {
     ssize_t recvval, recvb;
     uint32_t msgsize;
+    SSL *ssl;
+
+    ssl = os_net_get_tls(sock);
 
     /* Get header */
-    recvval = os_recv_waitall(sock, &msgsize, sizeof(msgsize));
+    if (ssl) {
+        recvval = os_recv_waitall_ssl(ssl, &msgsize, sizeof(msgsize));
+    } else {
+        recvval = os_recv_waitall(sock, &msgsize, sizeof(msgsize));
+    }
 
     switch(recvval) {
         case -1:
@@ -740,7 +869,11 @@ int OS_RecvSecureTCP(int sock, char * ret, uint32_t size) {
     }
 
     /* Get payload */
-    recvb = os_recv_waitall(sock, ret, msgsize);
+    if (ssl) {
+        recvb = os_recv_waitall_ssl(ssl, ret, msgsize);
+    } else {
+        recvb = os_recv_waitall(sock, ret, msgsize);
+    }
 
     /* Terminate string if there is space left */
 
