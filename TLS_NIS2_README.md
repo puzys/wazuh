@@ -4,7 +4,7 @@ This fork adds TLS/SSL encryption to the agent-manager data channel to satisfy N
 
 ## Manager Configuration
 
-Add a `<remote>` block with `connection` set to `secure_tls` in `ossec.conf`:
+Add a `<remote>` block with `connection` set to `secure_tls` in `ossec.conf` (or `wazuh-manager.conf`). Ensure you have built from this fork; upstream Wazuh does not support `secure_tls`.
 
 ```xml
 <ossec_config>

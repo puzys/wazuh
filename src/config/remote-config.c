@@ -107,7 +107,7 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
         logr->lip[0] = NULL;
     }
 
-    /* Clean - count existing connections */
+    /* Clean - count existing connections (allow 1 secure + 1 secure_tls for backward compat + NIS2) */
     while (logr->conn[pl] != 0) {
         if (logr->conn[pl] == SECURE_CONN) {
             secure_count++;
@@ -149,15 +149,15 @@ int Read_Remote(const OS_XML *xml, XML_NODE node, void *d1, __attribute__((unuse
             merror(XML_VALUENULL, node[i]->element);
             return (OS_INVALID);
         } else if (strcasecmp(node[i]->element, xml_remote_connection) == 0) {
-            if (strcmp(node[i]->content, "syslog") == 0) {
+            if (strcasecmp(node[i]->content, "syslog") == 0) {
                 logr->conn[pl] = SYSLOG_CONN;
-            } else if (strcmp(node[i]->content, "secure") == 0) {
+            } else if (strcasecmp(node[i]->content, "secure") == 0) {
                 logr->conn[pl] = SECURE_CONN;
                 if (++secure_count > 1) {
                     merror(DUP_SECURE);
                     return (OS_INVALID);
                 }
-            } else if (strcmp(node[i]->content, "secure_tls") == 0) {
+            } else if (strcasecmp(node[i]->content, "secure_tls") == 0) {
                 logr->conn[pl] = SECURE_TLS_CONN;
                 if (++secure_tls_count > 1) {
                     merror("Duplicate secure_tls connection.");
