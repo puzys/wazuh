@@ -396,7 +396,8 @@ STATIC bool agent_handshake_to_server(int server_id, bool is_startup) {
                         available_server = time(0);
 
                         minfo(AG_CONNECTED, agt->server[server_id].rip,
-                                agt->server[server_id].port, agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp");
+                                agt->server[server_id].use_tls ? agt->server[server_id].tls_port : agt->server[server_id].port,
+                                agt->server[server_id].use_tls ? "tls" : (agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp"));
 
                         if (is_startup) {
                             send_msg_on_startup();
