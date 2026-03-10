@@ -6,18 +6,22 @@ This fork adds TLS/SSL encryption to the agent-manager data channel to satisfy N
 
 Add a `<remote>` block with `connection` set to `secure_tls` in `ossec.conf` (or `wazuh-manager.conf`). Ensure you have built from this fork; upstream Wazuh does not support `secure_tls`.
 
+**Important:** Remoted runs in a chroot (typically `/var/wazuh-manager`). TLS paths in the config are resolved **relative to the chroot root**, not the host filesystem. Use paths like `/etc/certs/...` so they resolve to `$INSTALL_DIR/etc/certs/...` inside the chroot.
+
 ```xml
 <ossec_config>
   <remote>
     <connection>secure_tls</connection>
     <port>1516</port>
-    <tls_certificate>/var/ossec/etc/sslmanager.cert</tls_certificate>
-    <tls_key>/var/ossec/etc/sslmanager.key</tls_key>
-    <tls_ca>/var/ossec/etc/rootca.cert</tls_ca>
+    <tls_certificate>/etc/certs/sslmanager.pem</tls_certificate>
+    <tls_key>/etc/certs/sslmanager.key</tls_key>
+    <tls_ca>/etc/certs/rootca.pem</tls_ca>
     <tls_ciphers>HIGH:!ADH:!EXP:!MD5:!RC4</tls_ciphers>
   </remote>
 </ossec_config>
 ```
+
+Place the actual cert files under `$INSTALL_DIR/etc/certs/` (e.g. `/var/wazuh-manager/etc/certs/`). Both `.pem` and `.cert` extensions work; `.pem` is more common in Wazuh.
 
 ### Configuration Options
 
@@ -25,15 +29,21 @@ Add a `<remote>` block with `connection` set to `secure_tls` in `ossec.conf` (or
 |--------|----------|-------------|
 | `connection` | Yes | Must be `secure_tls` for TLS mode |
 | `port` | No | Default: 1516 |
-| `tls_certificate` | Yes | Path to server certificate |
-| `tls_key` | Yes | Path to server private key |
-| `tls_ca` | No | Path to CA certificate for client verification |
+| `tls_certificate` | Yes | Path to server certificate (chroot-relative) |
+| `tls_key` | Yes | Path to server private key (chroot-relative) |
+| `tls_ca` | No | Path to CA certificate for client verification (chroot-relative) |
 | `tls_ciphers` | No | OpenSSL cipher list (default: HIGH:!ADH:!EXP:!MD5:!RC4:!3DES:!CAMELLIA:@STRENGTH) |
 
-You can use the same certificates as `wazuh-authd` (enrollment). Generate them with:
+You can use the same certificates as `wazuh-authd` (enrollment). Generate them, then copy into the chroot:
 
 ```bash
-/var/ossec/bin/wazuh-authd -C 365 -B 2048 -K /var/ossec/etc/sslmanager.key -X /var/ossec/etc/sslmanager.cert -S "/C=LT/ST=Vilnius/CN=wazuh-manager/"
+# Generate (outside chroot)
+/var/wazuh-manager/bin/wazuh-authd -C 365 -B 2048 -K /tmp/sslmanager.key -X /tmp/sslmanager.pem -S "/C=LT/ST=Vilnius/CN=wazuh-manager/"
+
+# Copy into chroot
+mkdir -p /var/wazuh-manager/etc/certs
+cp /tmp/sslmanager.pem /tmp/sslmanager.key /var/wazuh-manager/etc/certs/
+cp /path/to/rootca.pem /var/wazuh-manager/etc/certs/
 ```
 
 ## Agent Configuration
@@ -50,9 +60,9 @@ The agent supports native TLS for the manager connection. Add `<use_tls>yes</use
       <port>1514</port>
       <use_tls>yes</use_tls>
       <tls_port>1516</tls_port>
-      <tls_certificate_path>/var/ossec/etc/agent.cert</tls_certificate_path>
+      <tls_certificate_path>/var/ossec/etc/agent.pem</tls_certificate_path>
       <tls_key_path>/var/ossec/etc/agent.key</tls_key_path>
-      <tls_ca_path>/var/ossec/etc/rootca.cert</tls_ca_path>
+      <tls_ca_path>/var/ossec/etc/rootca.pem</tls_ca_path>
     </manager>
   </client>
 </ossec_config>
@@ -83,25 +93,25 @@ If `tls_certificate_path`, `tls_key_path`, and `tls_ca_path` are not set, the ag
 ```bash
 # 1. Create CA (once)
 openssl genrsa -out rootca.key 4096
-openssl req -new -x509 -days 3650 -key rootca.key -out rootca.cert -subj "/C=LT/ST=Vilnius/O=MyOrg/CN=Wazuh-CA"
+openssl req -new -x509 -days 3650 -key rootca.key -out rootca.pem -subj "/C=LT/ST=Vilnius/O=MyOrg/CN=Wazuh-CA"
 
 # 2. Manager cert
 openssl genrsa -out sslmanager.key 2048
 openssl req -new -key sslmanager.key -out sslmanager.csr -subj "/C=LT/ST=Vilnius/CN=wazuh-manager"
-openssl x509 -req -in sslmanager.csr -CA rootca.cert -CAkey rootca.key -CAcreateserial -out sslmanager.cert -days 365
+openssl x509 -req -in sslmanager.csr -CA rootca.pem -CAkey rootca.key -CAcreateserial -out sslmanager.pem -days 365
 
 # 3. Agent cert (per agent or shared)
 openssl genrsa -out agent.key 2048
 openssl req -new -key agent.key -out agent.csr -subj "/C=LT/ST=Vilnius/CN=agent-001"
-openssl x509 -req -in agent.csr -CA rootca.cert -CAkey rootca.key -CAcreateserial -out agent.cert -days 365
+openssl x509 -req -in agent.csr -CA rootca.pem -CAkey rootca.key -CAcreateserial -out agent.pem -days 365
 ```
 
 ### Deployment
 
-| Role   | Files to deploy                          |
-|--------|------------------------------------------|
-| Manager| `rootca.cert`, `sslmanager.cert`, `sslmanager.key` |
-| Agent  | `rootca.cert`, `agent.cert`, `agent.key` |
+| Role   | Files to deploy                          | Notes |
+|--------|------------------------------------------|-------|
+| Manager| `rootca.pem`, `sslmanager.pem`, `sslmanager.key` | Place under `$INSTALL_DIR/etc/certs/`; config uses chroot-relative paths (e.g. `/etc/certs/`) |
+| Agent  | `rootca.pem`, `agent.pem`, `agent.key`   | Agent does not chroot; use normal paths (e.g. `/var/ossec/etc/`) |
 
 ### Renewal
 
@@ -120,8 +130,9 @@ You can run both legacy (AES) and TLS listeners by defining two `<remote>` block
 <remote>
   <connection>secure_tls</connection>
   <port>1516</port>
-  <tls_certificate>/var/ossec/etc/sslmanager.cert</tls_certificate>
-  <tls_key>/var/ossec/etc/sslmanager.key</tls_key>
+  <tls_certificate>/etc/certs/sslmanager.pem</tls_certificate>
+  <tls_key>/etc/certs/sslmanager.key</tls_key>
+  <tls_ca>/etc/certs/rootca.pem</tls_ca>
 </remote>
 ```
 
@@ -137,6 +148,10 @@ You can run both legacy (AES) and TLS listeners by defining two `<remote>` block
 - No config change = no behavior change.
 
 **Summary:** Existing setups continue to work. TLS is opt-in.
+
+## Version Compatibility
+
+If you use the Wazuh indexer and dashboard from packages, keep the manager on the same major version. For example, if indexer/dashboard are 4.14.x, rebase this fork on the 4.14.3 tag so the full stack stays compatible. Wazuh 5.0 changed API endpoints and may not work with 4.x indexer/dashboard.
 
 ## Build
 
