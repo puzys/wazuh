@@ -50,23 +50,24 @@ cp /path/to/rootca.pem /var/wazuh-manager/etc/certs/
 
 ### Native TLS
 
-The agent supports native TLS for the manager connection. Add `<use_tls>yes</use_tls>` and optionally `<tls_port>1516</tls_port>` to your `<manager>` block:
+The agent supports native TLS for the manager connection. Add `<use_tls>yes</use_tls>` and optionally `<tls_port>1516</tls_port>` to your `<server>` block:
 
 ```xml
 <ossec_config>
   <client>
-    <manager>
+    <server>
       <address>manager-ip</address>
-      <port>1514</port>
       <use_tls>yes</use_tls>
       <tls_port>1516</tls_port>
-      <tls_certificate_path>/var/ossec/etc/agent.pem</tls_certificate_path>
-      <tls_key_path>/var/ossec/etc/agent.key</tls_key_path>
-      <tls_ca_path>/var/ossec/etc/rootca.pem</tls_ca_path>
-    </manager>
+      <tls_certificate_path>/var/ossec/etc/certs/agent.pem</tls_certificate_path>
+      <tls_key_path>/var/ossec/etc/certs/agent.key</tls_key_path>
+      <tls_ca_path>/var/ossec/etc/certs/rootca.pem</tls_ca_path>
+    </server>
   </client>
 </ossec_config>
 ```
+
+When `use_tls` is yes, the agent connects to `tls_port` (1516); `<port>` and `<protocol>` are ignored for the TLS connection.
 
 **Agent TLS options:**
 
@@ -158,13 +159,13 @@ If you use the Wazuh indexer and dashboard from packages, keep the manager on th
 Build as standard Wazuh. The TLS changes are in:
 
 **Manager:**
-- `src/config/` – remote-config, remote-config.h
+- `src/config/` – remote-config.c, remote-config.h
 - `src/remoted/` – remoted.c, secure.c, netbuffer.c, remoted.h
-- `src/shared/include/defs.h` – DEFAULT_SECURE_TLS
+- `src/headers/` – defs.h (DEFAULT_SECURE_TLS), ssl_op.h
 
 **Agent:**
 - `src/config/` – client-config.c, client-config.h (use_tls, tls_port, tls_*_path)
-- `src/shared/os_net/` – os_net.c, os_net.h (OS_ConnectTLS, TLS-aware OS_SendSecureTCP/OS_RecvSecureTCP)
+- `src/os_net/` – os_net.c, os_net.h (OS_ConnectTLS, TLS-aware OS_SendSecureTCP/OS_RecvSecureTCP)
 - `src/client-agent/` – start_agent.c (TLS connection when use_tls)
 
 Ensure OpenSSL is available (Wazuh already depends on it).
