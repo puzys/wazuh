@@ -59,9 +59,9 @@ The agent supports native TLS for the manager connection. Add `<use_tls>yes</use
       <address>manager-ip</address>
       <use_tls>yes</use_tls>
       <tls_port>1516</tls_port>
-      <tls_certificate_path>/var/ossec/etc/certs/agent.pem</tls_certificate_path>
-      <tls_key_path>/var/ossec/etc/certs/agent.key</tls_key_path>
-      <tls_ca_path>/var/ossec/etc/certs/rootca.pem</tls_ca_path>
+      <tls_certificate_path>/var/ossec/etc/agent.pem</tls_certificate_path>
+      <tls_key_path>/var/ossec/etc/agent.key</tls_key_path>
+      <tls_ca_path>/var/ossec/etc/rootca.pem</tls_ca_path>
     </server>
   </client>
 </ossec_config>
